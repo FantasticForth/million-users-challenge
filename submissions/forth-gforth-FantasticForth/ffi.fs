@@ -71,8 +71,12 @@ c-library tdsc
 \c #include <sys/wait.h>
 \c /* block until any child exits; returns that child's pid (or -1). */
 \c static int tdsc_wait(void) { int st; return (int)wait(&st); }
-\c /* send SIGTERM to every process in our process group (brings workers down). */
-\c static void tdsc_term_group(void) { kill(0, SIGTERM); }
+\c /* SIGTERM a single pid. The supervisor signals each worker it forked, rather
+\c    than kill(0,...) which would hit the whole process group -- under test/run.sh
+\c    that group also contains the test harness, so kill(0) made the harness kill
+\c    itself (exit 143). Signaling explicit worker pids is correct under both
+\c    run.sh and systemd. Returns 0 on success, -1 on error (e.g. already gone). */
+\c static int tdsc_kill(int pid) { return kill((pid_t)pid, SIGTERM); }
 \c
 \c /* ---- epoll event loop support ---- */
 \c #include <sys/epoll.h>
@@ -181,7 +185,7 @@ c-function tdsc_ignore_sigpipe tdsc_ignore_sigpipe -- void
 c-function tdsc_fork           tdsc_fork          -- n
 c-function tdsc_getpid         tdsc_getpid        -- n
 c-function tdsc_wait           tdsc_wait          -- n
-c-function tdsc_term_group     tdsc_term_group    -- void
+c-function tdsc_kill           tdsc_kill          n -- n
 
 \ --- epoll + non-blocking I/O ---
 c-function tdsc_epoll_create   tdsc_epoll_create   -- n

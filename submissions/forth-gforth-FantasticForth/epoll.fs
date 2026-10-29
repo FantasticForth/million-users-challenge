@@ -399,6 +399,28 @@ variable shed-enabled?    0 shed-enabled? ! \ set from env SHED at startup
 \ process group too: rule 10 says a crashed server is not restarted, so we fail
 \ loud rather than keep serving with fewer workers than we reported.
 \ ---------------------------------------------------------------------------
+\ Worker pid table. The supervisor records the pid of each worker it forks so
+\ that, on shutdown, it can SIGTERM exactly those pids. We must NOT use
+\ kill(0, SIGTERM): that signals the whole process group, which under
+\ test/run.sh also contains the test harness -- the supervisor would kill the
+\ harness (exit 143) even on a fully passing run. Signaling explicit worker
+\ pids is correct under both run.sh and systemd, and only runs at shutdown so
+\ it has no effect on serving performance.
+1024 constant MAX-WORKERS             \ generous cap; real runs use nproc (<=16)
+create worker-pids MAX-WORKERS cells allot
+variable worker-count  0 worker-count !
+
+: record-worker ( pid -- )
+  worker-count @ MAX-WORKERS < if
+    worker-pids worker-count @ cells + !
+    1 worker-count +!
+  else drop then ;
+
+: term-workers ( -- )  \ SIGTERM each forked worker pid (never the group)
+  worker-count @ 0 ?do
+    worker-pids i cells + @ tdsc_kill drop
+  loop ;
+
 : epoll-main ( -- )
   tdsc_ignore_sigpipe
   config-load
@@ -408,10 +430,12 @@ variable shed-enabled?    0 shed-enabled? ! \ set from env SHED at startup
   the-workers @ 0 ?do
     tdsc_fork { pid }
     pid 0= if run-worker bye then                \ child worker: never returns
-    pid 0< if cr ." fork failed for worker " i . cr then
+    pid 0< if cr ." fork failed for worker " i . cr
+    else pid record-worker then                  \ supervisor: remember child pid
   loop
-  \ supervisor: wait for any worker to exit, then bring the group down.
+  \ supervisor: wait for any worker to exit, then bring the others down by
+  \ signaling the specific worker pids (NOT the process group).
   tdsc_wait { dead }
   cr ." worker pid=" dead . ." exited; supervisor terminating all workers" cr
-  tdsc_term_group        \ SIGTERM the whole process group (surviving workers)
+  term-workers           \ SIGTERM each surviving worker we forked
   bye ;
